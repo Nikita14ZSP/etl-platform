@@ -59,8 +59,8 @@ func run(cfg config.Config, log *slog.Logger) error {
 	// TODO: заменить на реестр операторов, когда он появится в operators/.
 	// Пока задача только логируется и считается успешной.
 	handler := runner.HandlerFunc(func(_ context.Context, msg *task.Message) error {
-		log.Warn("operators are not implemented yet, task skipped",
-			"operator", msg.Operator, "config", string(msg.Config))
+		// config в лог не пишем: в нём могут оказаться пароли и токены.
+		log.Warn("operators are not implemented yet, task skipped", "operator", msg.Operator)
 		return nil
 	})
 

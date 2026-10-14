@@ -11,6 +11,8 @@ import (
 	"github.com/Nikita14ZSP/etl-platform/worker/task"
 )
 
+const ackTimeout = 5 * time.Second
+
 // Source — откуда берутся задачи. В проде это queue.Consumer.
 type Source interface {
 	Read(ctx context.Context) (*queue.Delivery, error)
@@ -87,10 +89,10 @@ func (r *Runner) process(ctx context.Context, d *queue.Delivery) {
 	start := time.Now()
 	err = r.handler.Handle(ctx, msg)
 
-	if ctx.Err() != nil {
-		// Воркер останавливается посреди задачи. Не подтверждаем:
+	if err != nil && ctx.Err() != nil {
+		// Задачу оборвала остановка воркера. Не подтверждаем:
 		// сообщение останется в pending и не потеряется.
-		log.Warn("task interrupted by shutdown")
+		log.Warn("task interrupted by shutdown", "err", err)
 		return
 	}
 	if err != nil {
@@ -105,6 +107,12 @@ func (r *Runner) process(ctx context.Context, d *queue.Delivery) {
 }
 
 func (r *Runner) ack(ctx context.Context, log *slog.Logger, id string) {
+	// Отдельный контекст: если задача успела выполниться, а воркер уже
+	// останавливается, подтверждение всё равно должно дойти до Redis,
+	// иначе после рестарта задача выполнится второй раз.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ackTimeout)
+	defer cancel()
+
 	if err := r.src.Ack(ctx, id); err != nil {
 		log.Error("failed to ack message", "err", err)
 	}

@@ -46,7 +46,11 @@ func (s *fakeSource) Read(ctx context.Context) (*queue.Delivery, error) {
 	return nil, nil
 }
 
-func (s *fakeSource) Ack(_ context.Context, id string) error {
+func (s *fakeSource) Ack(ctx context.Context, id string) error {
+	// Как и настоящий клиент Redis, не выполняет запрос с отменённым контекстом.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acked = append(s.acked, id)
@@ -173,6 +177,33 @@ func TestRunDoesNotAckInterruptedTask(t *testing.T) {
 
 	if acked := src.ackedIDs(); len(acked) != 0 {
 		t.Fatalf("interrupted task should not be acked, got %v", acked)
+	}
+}
+
+func TestRunAcksTaskFinishedDuringShutdown(t *testing.T) {
+	src := &fakeSource{deliveries: []*queue.Delivery{{ID: "1-0", Payload: samplePayload(t)}}}
+
+	// Задача успевает доделаться уже после сигнала остановки.
+	started := make(chan struct{})
+	h := HandlerFunc(func(ctx context.Context, _ *task.Message) error {
+		close(started)
+		<-ctx.Done()
+		return nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		New(src, h, discardLogger()).Run(ctx)
+		close(done)
+	}()
+
+	<-started
+	cancel()
+	<-done
+
+	if acked := src.ackedIDs(); len(acked) != 1 {
+		t.Fatalf("finished task should be acked even during shutdown, got %v", acked)
 	}
 }
 
