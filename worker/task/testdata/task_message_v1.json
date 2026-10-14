@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "task_instance_id": "ti_01H8XGJWBWBAQ4Z4G5V9Q1SRKN",
+  "dag_id": "daily_sales_etl",
+  "run_id": "run_2026-09-16T03:00:00",
+  "task_id": "transform",
+  "try_number": 2,
+  "operator": "python",
+  "config": { "script": "transforms/join_sales.py" },
+  "context": {
+    "execution_date": "2026-09-16",
+    "xcom": { "extract_orders": "s3://staging/orders_2026-09-16.parquet" }
+  },
+  "timeout_sec": 1800,
+  "queued_at": "2026-09-16T03:00:04Z"
+}
