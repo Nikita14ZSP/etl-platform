@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Локальные переменные окружения
+.env
+*.env
+
+# Go
+worker/bin/
+coverage.out
