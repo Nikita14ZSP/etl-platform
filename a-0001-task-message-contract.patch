@@ -1,0 +1,642 @@
+From 458fe21c97bf46f08d94eddd7c878c533b86f529 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 15 Oct 2026 15:41:06 +0000
+Subject: [PATCH 1/3] =?UTF-8?q?contracts:=20JSON-=D1=81=D1=85=D0=B5=D0=BC?=
+ =?UTF-8?q?=D0=B0=20=D0=B8=20=D0=BF=D1=80=D0=B8=D0=BC=D0=B5=D1=80=20=D1=81?=
+ =?UTF-8?q?=D0=BE=D0=BE=D0=B1=D1=89=D0=B5=D0=BD=D0=B8=D1=8F=20TaskMessage?=
+ =?UTF-8?q?=20v1?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Формализует Контракт 1 (планировщик -> воркер) так, как его разбирает
+worker/task/message.go: одна запись стрима, поле payload, UTC в queued_at.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012PkBaUgCuKYQ56RkDvZBSs
+---
+ .../examples/task_message.v1.example.json     | 20 +++++
+ contracts/task_message.v1.schema.json         | 87 +++++++++++++++++++
+ 2 files changed, 107 insertions(+)
+ create mode 100644 contracts/examples/task_message.v1.example.json
+ create mode 100644 contracts/task_message.v1.schema.json
+
+diff --git a/contracts/examples/task_message.v1.example.json b/contracts/examples/task_message.v1.example.json
+new file mode 100644
+index 0000000..bb0f7ee
+--- /dev/null
++++ b/contracts/examples/task_message.v1.example.json
+@@ -0,0 +1,20 @@
++{
++  "schema_version": 1,
++  "task_instance_id": "ti_01H8X4Z7Q2K9M3N5P6R8T0V1W2",
++  "dag_id": "daily_sales_etl",
++  "run_id": "run_2026-09-16T03:00:00",
++  "task_id": "transform",
++  "try_number": 2,
++  "operator": "python",
++  "config": {
++    "script": "transforms/join_sales.py"
++  },
++  "context": {
++    "execution_date": "2026-09-16",
++    "xcom": {
++      "extract_orders": "s3://staging/orders_2026-09-16.parquet"
++    }
++  },
++  "timeout_sec": 1800,
++  "queued_at": "2026-09-16T03:00:04Z"
++}
+diff --git a/contracts/task_message.v1.schema.json b/contracts/task_message.v1.schema.json
+new file mode 100644
+index 0000000..f4e29fc
+--- /dev/null
++++ b/contracts/task_message.v1.schema.json
+@@ -0,0 +1,87 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://megaairflow.local/contracts/task_message.v1.schema.json",
++  "title": "TaskMessage v1",
++  "description": "Сообщение, которое планировщик кладёт в Redis Stream (поле payload), а Go-воркер оттуда читает. Описывает одну попытку выполнения одной задачи (TaskInstance). Контракт 1 из концепции проекта. Подробности и правила развития: docs/adr/0001-task-message-contract.md.",
++  "type": "object",
++  "additionalProperties": false,
++  "required": [
++    "schema_version",
++    "task_instance_id",
++    "dag_id",
++    "run_id",
++    "task_id",
++    "try_number",
++    "operator",
++    "config",
++    "context",
++    "timeout_sec",
++    "queued_at"
++  ],
++  "properties": {
++    "schema_version": {
++      "description": "Мажорная версия контракта. Растёт только при несовместимом изменении.",
++      "const": 1
++    },
++    "task_instance_id": {
++      "description": "Идентификатор TaskInstance. При повторной попытке остаётся тем же, меняется только try_number.",
++      "type": "string",
++      "minLength": 1,
++      "maxLength": 128
++    },
++    "dag_id": {
++      "type": "string",
++      "pattern": "^[A-Za-z0-9_.-]{1,250}$"
++    },
++    "run_id": {
++      "description": "Идентификатор DagRun, внутри которого запущена задача.",
++      "type": "string",
++      "minLength": 1,
++      "maxLength": 250
++    },
++    "task_id": {
++      "type": "string",
++      "pattern": "^[A-Za-z0-9_.-]{1,250}$"
++    },
++    "try_number": {
++      "description": "Номер попытки, начиная с 1. Растёт при каждом переходе up_for_retry -> queued.",
++      "type": "integer",
++      "minimum": 1
++    },
++    "operator": {
++      "description": "Тип оператора, который должен исполнить задачу. Воркер значение не сверяет со списком, а выбирает по нему оператор; список в схеме ограничивает только планировщик.",
++      "enum": ["bash", "python", "sql", "http"]
++    },
++    "config": {
++      "description": "Конфигурация оператора. Структура зависит от operator и проверяется оператором на стороне воркера; планировщик передаёт её как есть, после подстановки шаблонов.",
++      "type": "object"
++    },
++    "context": {
++      "description": "Контекст запуска.",
++      "type": "object",
++      "required": ["execution_date"],
++      "properties": {
++        "execution_date": {
++          "description": "Логическая дата запуска, YYYY-MM-DD.",
++          "type": "string",
++          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
++        },
++        "xcom": {
++          "description": "Результаты upstream-задач: task_id -> любое значение JSON. Большие данные передаются ссылкой (например, s3://...), а не значением.",
++          "type": "object"
++        }
++      },
++      "additionalProperties": false
++    },
++    "timeout_sec": {
++      "description": "Лимит времени выполнения в секундах.",
++      "type": "integer",
++      "minimum": 1
++    },
++    "queued_at": {
++      "description": "Момент постановки в очередь, RFC 3339. Планировщик всегда пишет UTC с суффиксом Z.",
++      "type": "string",
++      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
++    }
++  }
++}
+-- 
+2.43.0
+
+
+From 8d080b13cb97f3dc33417ac80eeb4fd310d7762e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 15 Oct 2026 15:41:06 +0000
+Subject: [PATCH 2/3] =?UTF-8?q?scheduler:=20=D0=BC=D0=BE=D0=B4=D0=B5=D0=BB?=
+ =?UTF-8?q?=D1=8C=20TaskMessage=20=D0=B8=20=D1=82=D0=B5=D1=81=D1=82=D1=8B?=
+ =?UTF-8?q?=20=D0=BA=D0=BE=D0=BD=D1=82=D1=80=D0=B0=D0=BA=D1=82=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pydantic-модель собирает сообщение для очереди и сериализует его в запись
+стрима etl:tasks. Тесты следят, чтобы модель и JSON-схема не расходились;
+проверка фикстуры воркера включится после merge ветки feature/worker-core.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012PkBaUgCuKYQ56RkDvZBSs
+---
+ scheduler/__init__.py                         |   0
+ scheduler/messages.py                         |  97 ++++++++++
+ scheduler/requirements-dev.txt                |   2 +
+ scheduler/requirements.txt                    |   1 +
+ scheduler/tests/__init__.py                   |   0
+ scheduler/tests/test_task_message_contract.py | 183 ++++++++++++++++++
+ 6 files changed, 283 insertions(+)
+ create mode 100644 scheduler/__init__.py
+ create mode 100644 scheduler/messages.py
+ create mode 100644 scheduler/requirements-dev.txt
+ create mode 100644 scheduler/requirements.txt
+ create mode 100644 scheduler/tests/__init__.py
+ create mode 100644 scheduler/tests/test_task_message_contract.py
+
+diff --git a/scheduler/__init__.py b/scheduler/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/scheduler/messages.py b/scheduler/messages.py
+new file mode 100644
+index 0000000..7f6cbca
+--- /dev/null
++++ b/scheduler/messages.py
+@@ -0,0 +1,97 @@
++"""Контракт 1: сообщение планировщика воркеру (TaskMessage v1).
++
++Источник правды по формату — contracts/task_message.v1.schema.json.
++Эта модель — обёртка для планировщика: строгая проверка при сборке
++сообщения и сериализация в запись Redis Stream. Со стороны воркера то же
++самое описано в worker/task/message.go.
++"""
++
++from __future__ import annotations
++
++import json
++from datetime import date, datetime, timezone
++from typing import Any, Literal
++
++from pydantic import BaseModel, ConfigDict, Field, field_validator
++
++SCHEMA_VERSION = 1
++
++# Значения совпадают с настройками воркера по умолчанию
++# (TASK_STREAM и CONSUMER_GROUP в worker/internal/config).
++STREAM_NAME = "etl:tasks"
++CONSUMER_GROUP = "etl-workers"
++
++# Единственное поле записи стрима, которое читает воркер.
++PAYLOAD_FIELD = "payload"
++
++_ID_PATTERN = r"^[A-Za-z0-9_.-]{1,250}$"
++
++Operator = Literal["bash", "python", "sql", "http"]
++
++
++class TaskContext(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    execution_date: date
++    xcom: dict[str, Any] = Field(default_factory=dict)
++
++
++class TaskMessage(BaseModel):
++    """Одна попытка выполнения задачи (TaskInstance), поставленная в очередь."""
++
++    # Планировщик — производитель, поэтому строго: опечатка в имени поля
++    # должна ловиться при сборке сообщения, а не у воркера. Воркер при этом
++    # неизвестные поля игнорирует (см. ADR-0001).
++    model_config = ConfigDict(extra="forbid")
++
++    schema_version: Literal[1] = SCHEMA_VERSION
++    task_instance_id: str = Field(min_length=1, max_length=128)
++    dag_id: str = Field(pattern=_ID_PATTERN)
++    run_id: str = Field(min_length=1, max_length=250)
++    task_id: str = Field(pattern=_ID_PATTERN)
++    try_number: int = Field(ge=1)
++    operator: Operator
++    config: dict[str, Any]
++    context: TaskContext
++    timeout_sec: int = Field(ge=1)
++    queued_at: datetime
++
++    @field_validator("queued_at")
++    @classmethod
++    def _queued_at_must_be_utc(cls, value: datetime) -> datetime:
++        if value.tzinfo is None or value.utcoffset() != timezone.utc.utcoffset(None):
++            raise ValueError("queued_at должен быть timezone-aware и в UTC")
++        return value
++
++    def to_json_dict(self) -> dict[str, Any]:
++        """Словарь, готовый к json.dumps и совпадающий со схемой контракта."""
++        data = self.model_dump(mode="json")
++        # pydantic пишет UTC как "+00:00"; в контракте зафиксирован суффикс Z.
++        data["queued_at"] = _format_utc(self.queued_at)
++        return data
++
++    def to_json(self) -> str:
++        return json.dumps(
++            self.to_json_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
++        )
++
++    def to_stream_fields(self) -> dict[str, str]:
++        """Поля для XADD в стрим STREAM_NAME.
++
++        Redis Stream хранит плоские пары строка -> строка, поэтому тело
++        целиком лежит в одном поле payload. Версия контракта уже есть
++        внутри JSON (schema_version), отдельного поля для неё нет.
++        """
++        return {PAYLOAD_FIELD: self.to_json()}
++
++    @classmethod
++    def from_stream_fields(cls, fields: dict[str, str]) -> "TaskMessage":
++        return cls.model_validate_json(fields[PAYLOAD_FIELD])
++
++
++def _format_utc(moment: datetime) -> str:
++    utc = moment.astimezone(timezone.utc)
++    text = utc.strftime("%Y-%m-%dT%H:%M:%S")
++    if utc.microsecond:
++        text += f".{utc.microsecond:06d}".rstrip("0")
++    return text + "Z"
+diff --git a/scheduler/requirements-dev.txt b/scheduler/requirements-dev.txt
+new file mode 100644
+index 0000000..21c696d
+--- /dev/null
++++ b/scheduler/requirements-dev.txt
+@@ -0,0 +1,2 @@
++-r requirements.txt
++jsonschema>=4.18,<5
+diff --git a/scheduler/requirements.txt b/scheduler/requirements.txt
+new file mode 100644
+index 0000000..f5f563f
+--- /dev/null
++++ b/scheduler/requirements.txt
+@@ -0,0 +1 @@
++pydantic>=2.6,<3
+diff --git a/scheduler/tests/__init__.py b/scheduler/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/scheduler/tests/test_task_message_contract.py b/scheduler/tests/test_task_message_contract.py
+new file mode 100644
+index 0000000..afc3607
+--- /dev/null
++++ b/scheduler/tests/test_task_message_contract.py
+@@ -0,0 +1,183 @@
++"""Тесты Контракта 1: модель TaskMessage и JSON-схема не должны расходиться."""
++
++import json
++import unittest
++from copy import deepcopy
++from datetime import datetime, timedelta, timezone
++from pathlib import Path
++
++from jsonschema import Draft202012Validator
++from pydantic import ValidationError
++
++from scheduler.messages import PAYLOAD_FIELD, SCHEMA_VERSION, TaskMessage
++
++ROOT = Path(__file__).resolve().parents[2]
++SCHEMA = json.loads((ROOT / "contracts" / "task_message.v1.schema.json").read_text("utf-8"))
++EXAMPLE = json.loads(
++    (ROOT / "contracts" / "examples" / "task_message.v1.example.json").read_text("utf-8")
++)
++VALIDATOR = Draft202012Validator(SCHEMA)
++
++# Фикстура воркера (команда B). Появится в main после merge feature/worker-core;
++# до этого тест пропускается.
++WORKER_FIXTURE = ROOT / "worker" / "task" / "testdata" / "task_message_v1.json"
++
++
++def errors(instance):
++    return [e.message for e in VALIDATOR.iter_errors(instance)]
++
++
++class SchemaItselfTest(unittest.TestCase):
++    def test_schema_is_valid_json_schema(self):
++        Draft202012Validator.check_schema(SCHEMA)
++
++    def test_example_matches_schema(self):
++        self.assertEqual(errors(EXAMPLE), [])
++
++    @unittest.skipUnless(WORKER_FIXTURE.exists(), "в этой ветке ещё нет кода воркера")
++    def test_worker_fixture_matches_schema(self):
++        """Сообщение, на котором тестируется воркер, обязано проходить нашу схему."""
++        fixture = json.loads(WORKER_FIXTURE.read_text("utf-8"))
++        self.assertEqual(errors(fixture), [])
++        TaskMessage.model_validate(fixture)
++
++
++class SchemaRejectsBadMessagesTest(unittest.TestCase):
++    def mutated(self, **changes):
++        msg = deepcopy(EXAMPLE)
++        msg.update(changes)
++        return msg
++
++    def test_missing_required_field(self):
++        for field in SCHEMA["required"]:
++            msg = deepcopy(EXAMPLE)
++            del msg[field]
++            self.assertTrue(errors(msg), f"поле {field} должно быть обязательным")
++
++    def test_unknown_top_level_field(self):
++        self.assertTrue(errors(self.mutated(surprise=1)))
++
++    def test_wrong_schema_version(self):
++        self.assertTrue(errors(self.mutated(schema_version=2)))
++
++    def test_try_number_starts_at_one(self):
++        self.assertTrue(errors(self.mutated(try_number=0)))
++
++    def test_unknown_operator(self):
++        self.assertTrue(errors(self.mutated(operator="ruby")))
++
++    def test_timeout_must_be_positive(self):
++        self.assertTrue(errors(self.mutated(timeout_sec=0)))
++
++    def test_queued_at_must_be_utc_z(self):
++        self.assertTrue(errors(self.mutated(queued_at="2026-09-16T03:00:04+03:00")))
++
++    def test_execution_date_format(self):
++        msg = deepcopy(EXAMPLE)
++        msg["context"]["execution_date"] = "16.09.2026"
++        self.assertTrue(errors(msg))
++
++    def test_xcom_is_optional(self):
++        msg = deepcopy(EXAMPLE)
++        del msg["context"]["xcom"]
++        self.assertEqual(errors(msg), [])
++
++
++class ModelTest(unittest.TestCase):
++    def test_example_parses(self):
++        msg = TaskMessage.model_validate(EXAMPLE)
++        self.assertEqual(msg.schema_version, SCHEMA_VERSION)
++        self.assertEqual(msg.try_number, 2)
++        self.assertEqual(
++            msg.context.xcom["extract_orders"], "s3://staging/orders_2026-09-16.parquet"
++        )
++
++    def test_model_output_satisfies_schema(self):
++        msg = TaskMessage.model_validate(EXAMPLE)
++        self.assertEqual(errors(msg.to_json_dict()), [])
++
++    def test_empty_xcom_output_satisfies_schema(self):
++        data = deepcopy(EXAMPLE)
++        del data["context"]["xcom"]
++        payload = TaskMessage.model_validate(data).to_json_dict()
++        self.assertEqual(errors(payload), [])
++
++    def test_roundtrip_through_stream_fields(self):
++        original = TaskMessage.model_validate(EXAMPLE)
++        restored = TaskMessage.from_stream_fields(original.to_stream_fields())
++        self.assertEqual(restored, original)
++
++    def test_stream_record_has_only_payload_field(self):
++        """Воркер читает только payload; других полей в записи быть не должно."""
++        fields = TaskMessage.model_validate(EXAMPLE).to_stream_fields()
++        self.assertEqual(set(fields), {PAYLOAD_FIELD})
++        self.assertIsInstance(fields[PAYLOAD_FIELD], str)
++        self.assertEqual(errors(json.loads(fields[PAYLOAD_FIELD])), [])
++
++    def test_queued_at_serialized_with_z_suffix(self):
++        msg = TaskMessage.model_validate(EXAMPLE)
++        self.assertEqual(msg.to_json_dict()["queued_at"], "2026-09-16T03:00:04Z")
++
++    def test_queued_at_keeps_microseconds(self):
++        data = deepcopy(EXAMPLE)
++        data["queued_at"] = "2026-09-16T03:00:04.250000Z"
++        out = TaskMessage.model_validate(data).to_json_dict()
++        self.assertEqual(out["queued_at"], "2026-09-16T03:00:04.25Z")
++        self.assertEqual(errors(out), [])
++
++    def test_non_utc_queued_at_is_rejected(self):
++        data = deepcopy(EXAMPLE)
++        data["queued_at"] = datetime(2026, 9, 16, 6, 0, 4, tzinfo=timezone(timedelta(hours=3)))
++        with self.assertRaises(ValidationError):
++            TaskMessage.model_validate(data)
++
++    def test_naive_queued_at_is_rejected(self):
++        data = deepcopy(EXAMPLE)
++        data["queued_at"] = datetime(2026, 9, 16, 3, 0, 4)
++        with self.assertRaises(ValidationError):
++            TaskMessage.model_validate(data)
++
++    def test_unknown_field_is_rejected_on_producer_side(self):
++        data = deepcopy(EXAMPLE)
++        data["tryy_number"] = 3
++        with self.assertRaises(ValidationError):
++            TaskMessage.model_validate(data)
++
++    def test_unsupported_version_in_payload_is_rejected(self):
++        data = deepcopy(EXAMPLE)
++        data["schema_version"] = 2
++        with self.assertRaises(ValidationError):
++            TaskMessage.from_stream_fields({PAYLOAD_FIELD: json.dumps(data)})
++
++    def test_serialization_is_deterministic(self):
++        msg = TaskMessage.model_validate(EXAMPLE)
++        self.assertEqual(msg.to_json(), msg.to_json())
++
++    def test_retry_keeps_task_instance_id(self):
++        first = TaskMessage.model_validate({**EXAMPLE, "try_number": 1})
++        retry = first.model_copy(update={"try_number": 2})
++        self.assertEqual(first.task_instance_id, retry.task_instance_id)
++        self.assertNotEqual(first.to_json(), retry.to_json())
++
++    def test_model_and_schema_agree_on_bad_input(self):
++        """Всё, что отвергает схема, должна отвергать и модель."""
++        bad_messages = []
++        for key, value in [
++            ("try_number", 0),
++            ("operator", "ruby"),
++            ("timeout_sec", 0),
++            ("schema_version", 2),
++            ("dag_id", "bad id with spaces"),
++        ]:
++            msg = deepcopy(EXAMPLE)
++            msg[key] = value
++            bad_messages.append(msg)
++
++        for msg in bad_messages:
++            self.assertTrue(errors(msg), f"схема должна отвергать {msg}")
++            with self.assertRaises(ValidationError, msg=f"модель должна отвергать {msg}"):
++                TaskMessage.model_validate(msg)
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+
+
+From 50b77374210295c3bf6dea24f2343753263398cb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 15 Oct 2026 15:41:06 +0000
+Subject: [PATCH 3/3] =?UTF-8?q?docs:=20ADR-0001=20=D0=BE=20=D0=BA=D0=BE?=
+ =?UTF-8?q?=D0=BD=D1=82=D1=80=D0=B0=D0=BA=D1=82=D0=B5=20=D1=81=D0=BE=D0=BE?=
+ =?UTF-8?q?=D0=B1=D1=89=D0=B5=D0=BD=D0=B8=D1=8F=20=D0=BF=D0=BB=D0=B0=D0=BD?=
+ =?UTF-8?q?=D0=B8=D1=80=D0=BE=D0=B2=D1=89=D0=B8=D0=BA=20->=20=D0=B2=D0=BE?=
+ =?UTF-8?q?=D1=80=D0=BA=D0=B5=D1=80?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Фиксирует транспорт, правила версионирования и сверку с реализацией
+воркера. Открытые вопросы к команде B вынесены отдельным списком.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012PkBaUgCuKYQ56RkDvZBSs
+---
+ docs/adr/0001-task-message-contract.md | 117 +++++++++++++++++++++++++
+ 1 file changed, 117 insertions(+)
+ create mode 100644 docs/adr/0001-task-message-contract.md
+
+diff --git a/docs/adr/0001-task-message-contract.md b/docs/adr/0001-task-message-contract.md
+new file mode 100644
+index 0000000..031368c
+--- /dev/null
++++ b/docs/adr/0001-task-message-contract.md
+@@ -0,0 +1,117 @@
++# ADR-0001: Контракт сообщения планировщик → воркер (TaskMessage v1)
++
++- **Статус:** предложен, ждёт подтверждения команды B
++- **Дата:** 2026-10-15
++- **Владелец:** команда A (планировщик)
++- **Связанные файлы:** [`contracts/task_message.v1.schema.json`](../../contracts/task_message.v1.schema.json),
++  [`contracts/examples/task_message.v1.example.json`](../../contracts/examples/task_message.v1.example.json),
++  [`scheduler/messages.py`](../../scheduler/messages.py), `worker/task/message.go` (ветка `feature/worker-core`)
++
++## Контекст
++
++Планировщик (Python) и воркеры (Go) общаются только через очередь. Формат сообщения в ней —
++Контракт 1 из концепции проекта. Команда B уже реализовала разбор сообщения в `worker/task/message.go`,
++поэтому этот ADR описывает то, что воркер реально читает, и фиксирует правила, по которым контракт
++будет меняться дальше.
++
++## Решение
++
++### Транспорт
++
++- Redis Streams, стрим `etl:tasks`, consumer group `etl-workers`. Это значения воркера по умолчанию
++  (`TASK_STREAM`, `CONSUMER_GROUP`); планировщик использует те же.
++- Запись стрима содержит **одно поле `payload`** — JSON с `TaskMessage`. Других полей нет, воркер их не читает.
++- Планировщик публикует через `XADD`, воркер читает через `XREADGROUP` и подтверждает через `XACK`.
++
++### Формат
++
++Формально формат описан JSON-схемой [`task_message.v1.schema.json`](../../contracts/task_message.v1.schema.json).
++Правила, которые из неё не очевидны:
++
++- Одна запись — **одна попытка** выполнения. Повтор — это новая запись с тем же `task_instance_id`
++  и `try_number + 1`.
++- `queued_at` планировщик всегда пишет в UTC с суффиксом `Z`.
++- `context.execution_date` — дата `YYYY-MM-DD`.
++- `context.xcom` — результаты upstream-задач (`task_id -> любой JSON`). Большие данные передаём ссылкой
++  (`s3://...`), а не значением.
++- `config` — JSON-объект, его структура зависит от `operator` и проверяется оператором на стороне воркера.
++
++### Версионирование и совместимость
++
++`schema_version` — целое число, мажорная версия контракта. Сейчас `1`.
++
++**Совместимые изменения** (версия не меняется):
++
++- добавление необязательного поля;
++- добавление нового значения `operator`.
++
++Воркер игнорирует неизвестные поля (`task.Parse` не отвергает лишнее), поэтому старые воркеры
++продолжают работать. Для нового `operator` воркеры нужно выкатывать раньше, чем планировщик начнёт
++ставить такие задачи.
++
++**Несовместимые изменения** (поднимают `schema_version`): удаление или переименование поля,
++смена типа или смысла поля, новое обязательное поле.
++
++Порядок выкатки несовместимого изменения:
++
++1. Воркеры учатся разбирать обе версии (`N` и `N+1`) и выкатываются.
++2. Только потом планировщик начинает слать `N+1`.
++
++Порядок строгий, потому что воркер сейчас **молча выбрасывает** сообщение, которое не смог разобрать,
++в том числе неподдерживаемой версии: пишет в лог и подтверждает (`runner.process`).
++Планировщик об этом не узнает.
++
++**Планировщик** (производитель) валидирует сообщение строго: неизвестное поле или опечатка в имени —
++ошибка при сборке (`extra="forbid"` в `scheduler/messages.py`). Это защита от опечаток, а не правило для воркера.
++
++### Повторные попытки
++
++Воркер подтверждает запись и после успеха, и после падения задачи; повторы решает планировщик
++(так сделано в `runner.process`). Если воркер остановлен посреди задачи, запись не подтверждается
++и остаётся в pending.
++
++## Сверка с реализацией воркера
++
++| Что | Планировщик (Python) | Воркер (Go) | Итог |
++|---|---|---|---|
++| Поля сообщения | см. схему | `task.Message` | совпадают |
++| Стрим / группа | `etl:tasks` / `etl-workers` | те же значения по умолчанию | совпадают |
++| Поля записи стрима | только `payload` | читает только `payload` | совпадают |
++| Неизвестные поля | запрещены | игнорируются | так и задумано |
++| `operator` | одно из `bash`, `python`, `sql`, `http` | любая непустая строка | воркер мягче |
++| `queued_at` | UTC, суффикс `Z` | любой RFC 3339 | планировщик строже |
++| `context.xcom` | всегда объект | необязателен | совместимо |
++
++Фикстура воркера `worker/task/testdata/task_message_v1.json` проходит нашу схему. Тест
++`test_worker_fixture_matches_schema` проверяет это автоматически; он включится, как только код воркера
++попадёт в `main`.
++
++## Открытые вопросы к команде B
++
++Эти пункты нужно закрыть на встрече (задача А2). Ни один из них не мешает самому формату, но от них
++зависят задачи про zombie и ретраи.
++
++1. **Записи в pending после падения воркера.** Воркер читает через `XREADGROUP ... >`, то есть только
++   новые записи, поэтому неподтверждённая запись мёртвого потребителя в текущем коде никому не отдаётся.
++   Предложение: единственный источник повторов — планировщик (zombie по heartbeat, `try_number + 1`);
++   воркеры pending не перехватывают. Тогда нужна отдельная уборка зависших записей. Если же воркеры начнут
++   делать `XAUTOCLAIM`, получится двойное исполнение: планировщик пошлёт новую попытку, а старую запись
++   подхватит другой воркер.
++2. **Как планировщик узнаёт результат и живость воркера.** Сейчас воркер ничего не пишет обратно
++   (`PG_DSN` помечен «пока не используется»), а по концепции heartbeat идёт раз в 5 секунд.
++   Нужно решить: статусы и heartbeat пишутся в Postgres напрямую или через Redis. Без этого планировщик
++   не может перевести задачу в `running`, `success` или `failed`.
++3. **Сообщение неподдерживаемой версии.** Сейчас оно подтверждается и теряется. Предложение: помимо
++   лога выставлять задаче `failed` (когда появится канал из вопроса 2), чтобы потеря была видна.
++4. **Список операторов.** В MVP концепции три оператора (`bash`, `python`, `sql`), а в примере DAG
++   есть ещё `http`. В схеме все четыре; подтвердить, что `http` входит в MVP.
++5. **Поле `pool`.** В v1 не входит: лимиты параллелизма применяет планировщик, воркеру они не нужны.
++   Если понадобится для метрик, добавим необязательным полем без смены версии.
++
++## Последствия
++
++- Любое изменение схемы идёт через PR с правкой этого ADR и уведомлением команды B.
++- Схема и модель не могут разойтись: тест сверяет, что всё отвергнутое схемой отвергает и модель,
++  а вывод модели проходит схему.
++- Формат описан на двух языках (Python и Go), поэтому единственной точкой сверки остаётся JSON-схема
++  и общая фикстура.
+-- 
+2.43.0
+
