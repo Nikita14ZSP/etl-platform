@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://megaairflow.local/contracts/task_message.v1.schema.json",
+  "title": "TaskMessage v1",
+  "description": "Сообщение, которое планировщик кладёт в Redis Stream (поле payload), а Go-воркер оттуда читает. Описывает одну попытку выполнения одной задачи (TaskInstance). Контракт 1 из концепции проекта. Подробности и правила развития: docs/adr/0001-task-message-contract.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_instance_id",
+    "dag_id",
+    "run_id",
+    "task_id",
+    "try_number",
+    "operator",
+    "config",
+    "context",
+    "timeout_sec",
+    "queued_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Мажорная версия контракта. Растёт только при несовместимом изменении.",
+      "const": 1
+    },
+    "task_instance_id": {
+      "description": "Идентификатор TaskInstance. При повторной попытке остаётся тем же, меняется только try_number.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "dag_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,250}$"
+    },
+    "run_id": {
+      "description": "Идентификатор DagRun, внутри которого запущена задача.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 250
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,250}$"
+    },
+    "try_number": {
+      "description": "Номер попытки, начиная с 1. Растёт при каждом переходе up_for_retry -> queued.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "operator": {
+      "description": "Тип оператора, который должен исполнить задачу. Воркер значение не сверяет со списком, а выбирает по нему оператор; список в схеме ограничивает только планировщик.",
+      "enum": ["bash", "python", "sql", "http"]
+    },
+    "config": {
+      "description": "Конфигурация оператора. Структура зависит от operator и проверяется оператором на стороне воркера; планировщик передаёт её как есть, после подстановки шаблонов.",
+      "type": "object"
+    },
+    "context": {
+      "description": "Контекст запуска.",
+      "type": "object",
+      "required": ["execution_date"],
+      "properties": {
+        "execution_date": {
+          "description": "Логическая дата запуска, YYYY-MM-DD.",
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "xcom": {
+          "description": "Результаты upstream-задач: task_id -> любое значение JSON. Большие данные передаются ссылкой (например, s3://...), а не значением.",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "timeout_sec": {
+      "description": "Лимит времени выполнения в секундах.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "queued_at": {
+      "description": "Момент постановки в очередь, RFC 3339. Планировщик всегда пишет UTC с суффиксом Z.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$"
+    }
+  }
+}
